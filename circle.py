@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import Message, CallbackQuery
 
+import config
 import db
 import keyboards
 import process_steps
@@ -110,17 +111,23 @@ async def _finalize(message: Message, state: FSMContext, uid: int, active, profi
         duration = (dt1 - dt0).total_seconds()
     except (TypeError, ValueError):
         duration = 0.0
+    cost = config.CIRCLE_COST
+    net = profit - cost  # себестоимость круга вычитается из прибыли
     await db.complete_process(
-        uid, started, finished, duration, profit,
+        uid, started, finished, duration, net,
         active["resource_number"], active["result_value"],
     )
-    new_balance = await db.change_balance(uid, profit, "process", "Прибыль/убыток по процессу")
+    new_balance = await db.change_balance(
+        uid, net, "process", f"Прибыль/убыток по процессу (себестоимость −{utils.fmt(cost)})"
+    )
     await db.clear_active(uid)
     await state.set_state(None)
-    sign = "+" if profit >= 0 else ""
+    sign = "+" if net >= 0 else ""
     await message.answer(
         "🏁 <b>Процесс завершён.</b>\n\n"
-        f"Итог: {sign}{utils.fmt(profit)}\n"
+        f"Введено: {utils.fmt(profit)}\n"
+        f"Себестоимость круга: −{utils.fmt(cost)}\n"
+        f"Итог: {sign}{utils.fmt(net)}\n"
         f"Баланс: {utils.fmt(new_balance)}\n\n"
         "Главное меню:",
         reply_markup=keyboards.main_menu(),
@@ -152,7 +159,11 @@ async def on_input(message: Message, state: FSMContext):
             )
             return
         await db.set_active_field(uid, "resource_number", number)
-        await message.answer(f"✅ Выбран ресурс №{number}: <code>{resource['value']}</code>")
+        await db.delete_resources_by_numbers(uid, [number])  # использованный ресурс удаляется из списка
+        await message.answer(
+            f"✅ Взят ресурс №{number}: <code>{resource['value']}</code>\n"
+            "Ресурс использован и удалён из списка."
+        )
         await enter_step(message, state, uid, idx + 1)
 
     elif kind == "result":
