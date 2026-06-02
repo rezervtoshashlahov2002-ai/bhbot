@@ -4,6 +4,8 @@
 при первом запуске; данные переживают перезапуск бота.
 """
 import hashlib
+import os
+import tempfile
 from datetime import datetime
 from typing import Optional, Iterable
 
@@ -33,6 +35,20 @@ async def connect() -> None:
 async def close() -> None:
     if _db is not None:
         await _db.close()
+
+
+async def snapshot_bytes() -> bytes:
+    """Безопасный снимок БД через VACUUM INTO (корректен даже при WAL)."""
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    os.remove(tmp)  # VACUUM INTO требует отсутствия целевого файла
+    try:
+        await _db.execute("VACUUM INTO ?", (tmp,))
+        with open(tmp, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 async def _init() -> None:
@@ -289,6 +305,29 @@ async def delete_resources_by_numbers(uid: int, numbers: Iterable[int]) -> int:
         )
     await _db.commit()
     return len(ids)
+
+
+async def get_resource(uid: int, rid: int):
+    cur = await _db.execute(
+        "SELECT * FROM resources WHERE id = ? AND user_id = ?", (rid, uid)
+    )
+    return await cur.fetchone()
+
+
+async def resource_position(uid: int, rid: int) -> Optional[int]:
+    rows = await list_resources(uid)
+    for i, r in enumerate(rows, start=1):
+        if r["id"] == rid:
+            return i
+    return None
+
+
+async def delete_resource(uid: int, rid: int) -> bool:
+    cur = await _db.execute(
+        "DELETE FROM resources WHERE id = ? AND user_id = ?", (rid, uid)
+    )
+    await _db.commit()
+    return cur.rowcount > 0
 
 
 # ---------------------------------------------------------- active process ---

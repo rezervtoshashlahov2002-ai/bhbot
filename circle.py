@@ -30,11 +30,25 @@ def step_text(idx: int) -> str:
 async def enter_step(event, state: FSMContext, uid: int, idx: int) -> None:
     idx = max(0, min(idx, len(STEPS) - 1))
     await db.set_step(uid, idx)
-    if STEPS[idx].get("input"):
+    step = STEPS[idx]
+    if step.get("input"):
         await state.set_state(CircleSG.waiting_input)
     else:
         await state.set_state(None)
-    await utils.respond(event, step_text(idx), keyboards.step_kb(idx))
+
+    if step.get("input") == "resource":
+        resources = await db.list_resources(uid)
+        text = step_text(idx)
+        if resources:
+            text += "\n\nВыберите прокси кнопкой ниже (или отправьте его номер):"
+        else:
+            text += (
+                "\n\n⚠️ Список ресурсов пуст. Нажмите «Назад», добавьте прокси "
+                "через /proxy и начните процесс заново."
+            )
+        await utils.respond(event, text, keyboards.resource_pick_kb(resources))
+    else:
+        await utils.respond(event, step_text(idx), keyboards.step_kb(idx))
 
 
 async def start_or_resume(event, state: FSMContext) -> None:
@@ -100,6 +114,38 @@ async def cb_tabla(cb: CallbackQuery, state: FSMContext):
         f"🟥 Засчитана «Табла». Всего: {total}.\n\nГлавное меню:",
         keyboards.main_menu(),
     )
+
+
+@router.callback_query(F.data.startswith("cr:"))
+async def cb_pick_resource(cb: CallbackQuery, state: FSMContext):
+    uid = cb.from_user.id
+    active = await db.get_active(uid)
+    if active is None:
+        await cb.answer("Активный процесс не найден. Запустите заново.", show_alert=True)
+        return
+    idx = active["current_step"]
+    if STEPS[idx].get("input") != "resource":
+        await cb.answer()
+        return
+    try:
+        rid = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer("Некорректный выбор.", show_alert=True)
+        return
+    resource = await db.get_resource(uid, rid)
+    if resource is None:
+        await cb.answer("Этот ресурс уже недоступен, список обновлён.", show_alert=True)
+        await enter_step(cb, state, uid, idx)  # перерисовать актуальный список
+        return
+    pos = await db.resource_position(uid, rid) or 0
+    await db.set_active_field(uid, "resource_number", pos)
+    await db.delete_resource(uid, rid)  # использованный ресурс удаляется из списка
+    await cb.answer("Ресурс взят.")
+    await cb.message.answer(
+        f"✅ Взят ресурс: <code>{resource['value']}</code>\n"
+        "Ресурс использован и удалён из списка."
+    )
+    await enter_step(cb, state, uid, idx + 1)
 
 
 async def _finalize(message: Message, state: FSMContext, uid: int, active, profit: float):

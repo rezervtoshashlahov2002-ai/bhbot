@@ -27,6 +27,18 @@ def cancel_kb(callback_data: str = "m:back"):
 
 
 # ---------------------------------------------------------------- circle ---
+def resource_pick_kb(resources, max_label: int = 40):
+    """Кнопки выбора прокси на шаге процесса. callback_data: cr:<id>."""
+    kb = InlineKeyboardBuilder()
+    for i, r in enumerate(resources, start=1):
+        value = r["value"]
+        label = value if len(value) <= max_label else value[: max_label - 1] + "…"
+        kb.button(text=f"{i}. {label}", callback_data=f"cr:{r['id']}")
+    kb.button(text="❌ Назад", callback_data="c:back")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def step_kb(step_idx: int):
     step = process_steps.STEPS[step_idx]
     kb = InlineKeyboardBuilder()
